@@ -1,0 +1,130 @@
+#include <Blynk.h>
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+ 
+char auth[] = "Sk4j59QM7G6MC-GXwC95CqN4-1CdSrGA";       // You should get Auth Token in the Blynk App.
+char ssid[] = "indigo";                       // Your WiFi credentials.
+char pass[] = "toktoktok";
+ 
+int DSPIN = D5; // Dallas Temperature Sensor
+ 
+namespace pin 
+{
+const byte tds_sensor = A0;   // TDS Sensor
+}
+ 
+namespace device 
+{
+float aref = 3.3;
+}
+ 
+namespace sensor 
+{
+float ec = 0;
+unsigned int tds = 0;
+float ecCalibration = 1;
+} 
+ 
+void setup() 
+{
+  Serial.begin(115200); // Dubugging on hardware Serial 0
+  Blynk.begin(auth, ssid, pass);
+}
+ 
+void loop() 
+{
+  Blynk.run();
+  double waterTemp = TempRead();
+  waterTemp  = waterTemp*0.0625; // conversion accuracy is 0.0625 / LSB
+  
+  float rawEc = analogRead(pin::tds_sensor) * device::aref / 1024.0; // read the analog value more stable by the median filtering algorithm, and convert to voltage value
+  float temperatureCoefficient = 1.0 + 0.02 * (waterTemp - 25.0); // temperature compensation formula: fFinalResult(25^C) = fFinalResult(current)/(1.0+0.02*(fTP-25.0));
+  
+  sensor::ec = (rawEc / temperatureCoefficient) * sensor::ecCalibration; // temperature and calibration compensation
+  sensor::tds = (133.42 * pow(sensor::ec, 3) - 255.86 * sensor::ec * sensor::ec + 857.39 * sensor::ec) * 0.5; //convert voltage value to tds value
+  
+  Serial.print(F("TDS:")); Serial.println(sensor::tds);
+  Serial.print(F("EC:")); Serial.println(sensor::ec, 2);
+  Serial.print(F("Temperature:")); Serial.println(waterTemp,2);  
+  Serial.print(F(""));
+ 
+  Blynk.virtualWrite(V1, sensor::tds);
+  Blynk.virtualWrite(V2, sensor::ec);
+  Blynk.virtualWrite(V3, waterTemp);
+  delay(1000);
+ 
+}
+ 
+ 
+boolean DS18B20_Init()
+{
+  pinMode(DSPIN, OUTPUT);
+  digitalWrite(DSPIN, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(DSPIN, LOW);
+  delayMicroseconds(750);//480-960
+  digitalWrite(DSPIN, HIGH);
+  pinMode(DSPIN, INPUT);
+  int t = 0;
+  while(digitalRead(DSPIN))
+  {
+    t++;
+    if(t > 60) return false;
+    delayMicroseconds(1);
+  }
+  t = 480 - t;
+  pinMode(DSPIN, OUTPUT);
+  delayMicroseconds(t);
+  digitalWrite(DSPIN, HIGH);
+  return true;
+}
+ 
+void DS18B20_Write(byte data)
+{
+  pinMode(DSPIN, OUTPUT);
+  for(int i=0; i<8; i++)
+  {
+    digitalWrite(DSPIN, LOW);
+    delayMicroseconds(10);
+    if(data & 1) digitalWrite(DSPIN, HIGH);
+    else digitalWrite(DSPIN, LOW);
+    data >>= 1;
+    delayMicroseconds(50);
+    digitalWrite(DSPIN, HIGH);
+  }
+}
+ 
+byte DS18B20_Read()
+{
+  pinMode(DSPIN, OUTPUT);
+  digitalWrite(DSPIN, HIGH);
+  delayMicroseconds(2);
+  byte data = 0;
+  for(int i=0; i<8; i++)
+  {
+    digitalWrite(DSPIN, LOW);
+    delayMicroseconds(1);
+    digitalWrite(DSPIN, HIGH);
+    pinMode(DSPIN, INPUT);
+    delayMicroseconds(5);
+    data >>= 1;
+    if(digitalRead(DSPIN)) data |= 0x80;
+    delayMicroseconds(55);
+    pinMode(DSPIN, OUTPUT);
+    digitalWrite(DSPIN, HIGH);
+  }
+  return data;
+}
+ 
+int TempRead()
+{
+  if(!DS18B20_Init()) return 0;
+   DS18B20_Write (0xCC); // Send skip ROM command
+   DS18B20_Write (0x44); // Send reading start conversion command
+  if(!DS18B20_Init()) return 0;
+   DS18B20_Write (0xCC); // Send skip ROM command
+   DS18B20_Write (0xBE); // Read the register, a total of nine bytes, the first two bytes are the conversion value
+   int waterTemp = DS18B20_Read (); // Low byte
+   waterTemp |= DS18B20_Read () << 8; // High byte
+  return waterTemp;
+}
